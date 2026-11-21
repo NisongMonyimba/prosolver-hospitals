@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="prosolver-api" content="REPLACE_WITH_WORKER_URL" />
   <meta name="theme-color" content="#0b2441" />
   <meta name="description" content="Tell ProSolver Hospitals what slows your hospital work down. Describe or record a problem and join the early-access waitlist." />
   <title>ProSolver Hospitals | Tell us what needs solving</title>
@@ -28,76 +29,19 @@
       <div class="form-card" id="captureCard">
         <div id="entry"><div class="form-head"><div><h2>Tell us your problem</h2><p>You can share one problem now. More submissions may become available through referrals.</p></div><span class="step">01 / 02</span></div>
           <form id="waitlistForm" novalidate>
-            <div class="field"><label for="problem">What problem would you like help solving?</label><textarea id="problem" maxlength="5000" placeholder="For example: We spend hours finding equipment maintenance records, and I need a better way to track them."></textarea><div class="capture-label">Prefer talking? Record your problem instead.</div><div class="recorder"><button type="button" id="record" class="record-btn"><span class="dot"></span><span id="recordText">Record a voice note</span></button><span id="recordStatus" class="recorder-status" aria-live="polite">Up to 2 minutes</span><audio id="playback" class="audio-preview hidden" controls></audio></div><p class="muted-small">Voice recording works in supported browsers with microphone permission. Keep patient names and identifying details out of your submission.</p></div>
+            <div class="field"><label for="problem">What problem would you like help solving?</label><textarea id="problem" maxlength="5000" placeholder="For example: We spend hours finding equipment maintenance records, and I need a better way to track them."></textarea><div class="capture-label">Prefer talking? Record your problem instead.</div><div class="recorder"><button type="button" id="record" class="record-btn"><span class="dot"></span><span id="recordText">Record a voice note</span></button><span id="recordStatus" class="recorder-status" aria-live="polite">Up to 2 minutes</span><audio id="playback" class="audio-preview hidden" controls></audio></div><p class="muted-small">Voice recording works in supported browsers with microphone permission. Do not record patients, identifiers, or confidential hospital data. See <a href="./privacy.html">privacy information</a>.</p></div>
             <div class="field"><label for="daily">What problems do you deal with regularly? <span class="optional">Optional</span></label><textarea id="daily" style="min-height:78px" maxlength="5000" placeholder="Tell us about repetitive tasks, bottlenecks, or work you wish were easier."></textarea></div>
             <div class="two"><div class="field"><label for="email">Work or personal email</label><input id="email" type="email" autocomplete="email" placeholder="you@example.com" required /></div><div class="field"><label for="phone">Phone number</label><input id="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="+233 …" required /></div></div>
             <div class="consent"><input type="checkbox" id="consent" required /><label for="consent">I agree to be contacted about my submission and early access. I understand ProSolver may analyze de-identified problem themes to improve services and products. I will not submit patient information or confidential hospital documents.</label></div>
             <div id="error" class="message error hidden" role="alert"></div><button class="submit-btn" id="submit" type="submit">Submit my problem & join waitlist →</button><p class="under-button">Free to join · No subscription · No obligation</p>
-          </form><div class="footnote"><b>Prototype notice:</b> This demonstration does not send, save, or register submissions. A secure backend and privacy notice are required before launch.</div>
+          </form><div class="footnote"><b>Prototype notice:</b> Registration opens after secure backend configuration and required privacy disclosures are completed.</div>
         </div>
-        <div id="success" class="success hidden"><div class="success-mark">✓</div><h2>Your preview is ready.</h2><p>This is how the post-submission referral step will work after the waitlist backend is connected.</p><div class="referral-box"><label for="referral">Your example referral link</label><div class="referral-line"><input id="referral" readonly aria-label="Example referral link" /><button id="copy" type="button">Copy</button></div><p class="success-note">In the live version, qualifying referred users can earn you points toward eligible extra submissions and selected easy resolution steps. Points and rewards are only issued after verification.</p></div><button class="share-btn" id="share" type="button">Share your invitation</button><button class="reset" type="button" id="reset">Return to form</button><div class="footnote">Demo only. No real referral identity, points, or waitlist registration has been created.</div></div>
+        <div id="success" class="success hidden"><div class="success-mark">✓</div><h2>Check your email</h2><p>Please verify your email to receive a referral link.</p><div class="referral-box"><label for="referral">Your referral link</label><div class="referral-line"><input id="referral" readonly aria-label="Example referral link" /><button id="copy" type="button">Copy</button></div><p class="success-note">1 point for a qualifying verified referral. Each point unlocks 1 extra problem submission. Resolution services are not guaranteed.</p></div><button class="share-btn" id="share" type="button">Share your invitation</button><button class="reset" type="button" id="reset">Return to form</button><div class="footnote">After email verification, qualifying referrals earn points toward one extra submission each.</div></div>
       </div>
     </div></section>
     <section class="how"><div class="wrap"><div class="section-head"><h2>Start with the problem. Not another system.</h2><p>ProSolver is learning directly from professionals and decision makers to understand where practical help is most needed.</p></div><div class="cards"><article class="card"><span class="cardnum">01</span><h3>Tell us what's difficult</h3><p>Type or record a work problem. It can be an everyday frustration or a larger operational challenge.</p></article><article class="card"><span class="cardnum">02</span><h3>Join the early-access list</h3><p>Leave your email and phone number. We will use your problem to understand what support you would value.</p></article><article class="card"><span class="cardnum">03</span><h3>Invite your colleagues</h3><p>Share your personal link after signup. Verified referrals can unlock points for eligible extra requests and simple tasks.</p></article></div></div></section>
   </main>
   <footer class="bottom"><div class="wrap bottom-inner"><div><b>ProSolver Hospitals</b><p>Practical problem solving for the people who keep hospitals working. Not an emergency or clinical decision-support service. Do not submit patient data, credentials, or sensitive records.</p></div><a class="small-link" href="#top">Tell us your problem ↑</a></div></footer>
-<script>
-(() => {
-  'use strict';
-  const $ = id => document.getElementById(id);
-  const form = $('waitlistForm');
-  const recordBtn = $('record');
-  const status = $('recordStatus');
-  const playback = $('playback');
-  const error = $('error');
-  let recorder = null, stream = null, chunks = [], audioBlob = null, recordingStart = 0, timeLimit = null, audioUrl = null;
-  function setError(msg){error.textContent=msg;error.classList.remove('hidden')}
-  function clearError(){error.classList.add('hidden');error.textContent=''}
-  function stopCapture(){if(recorder?.state==='recording')recorder.stop()}
-  function cleanupStream(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}if(timeLimit){clearTimeout(timeLimit);timeLimit=null}}
-  recordBtn.addEventListener('click',async()=>{
-    clearError();
-    if(recorder?.state==='recording'){stopCapture();return}
-    if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){setError('Voice recording is not supported in this browser. Please type your problem instead.');return}
-    try{
-      stream=await navigator.mediaDevices.getUserMedia({audio:true});
-      const mime=['audio/webm;codecs=opus','audio/webm','audio/mp4'].find(t=>MediaRecorder.isTypeSupported(t));
-      recorder=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);chunks=[];
-      recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
-      recorder.onstop=()=>{
-        audioBlob=new Blob(chunks,{type:recorder.mimeType||'audio/webm'});
-        if(audioUrl)URL.revokeObjectURL(audioUrl);
-        audioUrl=URL.createObjectURL(audioBlob);
-        playback.src=audioUrl;playback.classList.remove('hidden');
-        recordBtn.classList.remove('active');$('recordText').textContent='Record again';
-        status.textContent=`Voice note ready (${Math.round(audioBlob.size/1024)} KB)`;
-        cleanupStream();
-      };
-      recorder.start();recordingStart=Date.now();
-      recordBtn.classList.add('active');$('recordText').textContent='Stop recording';status.textContent='Recording… 2-minute limit';
-      timeLimit=setTimeout(stopCapture,120000);
-    }catch(err){cleanupStream();setError('Microphone access was unavailable. You can type your problem instead.')}
-  });
-  form.addEventListener('submit',e=>{
-    e.preventDefault();clearError();
-    if(recorder?.state==='recording'){setError('Stop your recording before submitting.');return}
-    if(!$('problem').value.trim()&&!audioBlob){setError('Please type a problem or record a voice note.');$('problem').focus();return}
-    if(!$('email').validity.valid||!$('email').value.trim()){setError('Please enter a valid email address.');$('email').focus();return}
-    const digits=$('phone').value.replace(/\D/g,'');
-    if(digits.length<7||digits.length>15){setError('Please enter a phone number including country code.');$('phone').focus();return}
-    if(!$('consent').checked){setError('Please accept the contact and data-use consent to continue.');return}
-    // Deliberately do not persist, send, or log any problem text, voice data, or contact details.
-    // This page is a front-end prototype only. A live deployment requires an authenticated backend and consent records.
-    const demoCode='DEMO-'+Math.random().toString(36).slice(2,9).toUpperCase();
-    $('referral').value=`https://prosolver.example/hospitals?ref=${demoCode}`;
-    $('entry').classList.add('hidden');$('success').classList.remove('hidden');
-    $('captureCard').scrollIntoView({behavior:'smooth',block:'center'});
-  });
-  $('copy').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('referral').value);$('copy').textContent='Copied';}catch(e){$('referral').select();$('copy').textContent='Select link';}});
-  $('share').addEventListener('click',async()=>{const data={title:'ProSolver Hospitals',text:'What hospital work problem would you like solved? Share your ideas with ProSolver Hospitals.',url:$('referral').value};try{if(navigator.share)await navigator.share(data);else await navigator.clipboard.writeText(data.url)}catch(e){}});
-  $('reset').addEventListener('click',()=>{$('success').classList.add('hidden');$('entry').classList.remove('hidden');form.reset();audioBlob=null;cleanupStream();if(audioUrl)URL.revokeObjectURL(audioUrl);audioUrl=null;playback.removeAttribute('src');playback.classList.add('hidden');$('recordText').textContent='Record a voice note';status.textContent='Up to 2 minutes';$('copy').textContent='Copy';});
-  window.addEventListener('pagehide',cleanupStream);
-})();
-</script>
+<script src="./live.js" defer></script>
 </body>
 </html>

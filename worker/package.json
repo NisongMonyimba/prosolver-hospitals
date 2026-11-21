@@ -1,0 +1,1 @@
+{"name":"prosolver-hospitals-api","private":true,"type":"module","scripts":{"dev":"wrangler dev","deploy":"wrangler deploy","migrate:local":"wrangler d1 migrations apply prosolver-hospitals --local","migrate:remote":"wrangler d1 migrations apply prosolver-hospitals --remote","test:syntax":"node --check src/index.js"},"devDependencies":{"wrangler":"^4.0.0"}}
