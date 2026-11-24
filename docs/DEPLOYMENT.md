@@ -1,47 +1,62 @@
 # Controlled production deployment
 
-No command in this document was run against production during the engineering task. Existing D1 UUID: `fef015df-c6fc-4c3a-9f6d-5acf6b3444ad`; R2 bucket: `prosolver-hospitals-private-audio`; Worker: `prosolver-hospitals-api`. Do not create them again. The founder must confirm the correct Cloudflare account in Wrangler before any write.
+Existing resources only: D1 `prosolver-hospitals` (`fef015df-c6fc-4c3a-9f6d-5acf6b3444ad`), private R2 `prosolver-hospitals-private-audio`, Worker `prosolver-hospitals-api`. These commands have **not** been run on production. Run them from a trusted terminal after verifying the Cloudflare account. Never paste secrets into source, chat, terminal arguments, or logs.
 
-## Resend and configuration
+## Approval gates
 
-1. Create or open a [Resend account](https://resend.com/). In Domains, add a domain the operator controls. Copy the **exact** DNS records shown by Resend into that domain's DNS provider. Resend's current verification displays the relevant DKIM, SPF and, where applicable, MX records; do not invent values. Wait until sending is verified. See [Resend's domain guidance](https://resend.com/changelog/domain-verification-events).
-2. In API Keys, create a **Sending access** key restricted to the verified domain where offered. [Resend documents those permissions](https://resend.com/changelog/new-api-key-permissions). Store the key in a password manager. Choose an actual mailbox on the verified domain for `EMAIL_FROM`; do not commit a key or paste it into Codex/GitHub.
-3. Edit `worker/wrangler.jsonc`: set the actual `PUBLIC_API_URL`, `EMAIL_FROM`, approved `RETENTION_DAYS`, and eventually the explicit signup/notice flags. Keep both flags `false` until all launch gates pass. Update the approved consent notice version in `worker/src/index.js` and `public/index.html` together. Complete `public/privacy.html`.
-4. Enter secrets directly at a trusted terminal, through Wrangler's hidden prompt:
+`INFRA_DEPLOY_APPROVED=YES` permits migrations, a closed Worker deployment, and secrets after account verification. `SYNTHETIC_TEST_APPROVED=YES` separately permits the restricted synthetic mode and test. `PUBLIC_LAUNCH_APPROVED=YES` separately permits opening registration and preparing the frontend for publication. Each production write also requires a matching account ID and an interactive typed Worker name. These are distinct owner decisions. A first Worker deployment does not depend on synthetic smoke testing or public launch approval.
 
-```bash
-cd ~/prosolver-hospitals/worker
-npx wrangler secret put RESEND_API_KEY
-npx wrangler secret put ADMIN_TOKEN
-```
+The privacy notice is a prelaunch draft. Complete `public/privacy.html`, obtain the required legal and operator approval, set the same approved notice version in `public/index.html` and `worker/src/index.js`, and record `PRIVACY_NOTICE_APPROVED=true` before synthetic testing. Synthetic mode accepts only reserved `smoke-...@example.test` identities, `+999...` numbers, marked text, and the canonical silent WAV fixture. It never sends mail. No human or patient data belongs in this mode.
 
-Generate the admin token securely and save it in a password manager before entering it. Do not generate it into a visible terminal line or shell history.
+## Founder commands in order
 
-## Order of operations
+1. Install Node 24 and Python 3.12 (or compatible versions), then run local tests. The browser test uses Chrome with its sandbox enabled and Python `websockets==17.1`.
 
 ```bash
 cd ~/prosolver-hospitals
 ./scripts/deploy.sh preflight
 ./scripts/deploy.sh full-test
+python3 -m pip install websockets==17.1
+./scripts/deploy.sh browser-test
 ./scripts/deploy.sh prod-check
 ./scripts/deploy.sh migrate-plan
 ```
 
-Review the Cloudflare account, database UUID, bucket privacy, pending migration list and [launch checklist](LAUNCH_CHECKLIST.md). Production-changing modes require an explicit account ID, `PRODUCTION_GATES_ACK=YES` and an interactive typed Worker name. Set the actual account ID from the Cloudflare dashboard in your local shell (do not commit it):
+2. Verify the Cloudflare account, D1 UUID, private R2 bucket, migration plan, and recovery procedure. Keep `PUBLIC_SIGNUPS_ENABLED=false`, `SYNTHETIC_TEST_ENABLED=false`, and `PRIVACY_NOTICE_APPROVED=false`. Export the verified account ID in the trusted terminal. These commands apply migrations and perform the **first Worker deployment with registration closed**. The placeholder `PUBLIC_API_URL` and sender are safe at this stage because registration remains disabled. The deploy output supplies the actual Worker URL.
 
 ```bash
-export CLOUDFLARE_ACCOUNT_ID='<YOUR_VERIFIED_32_CHARACTER_ACCOUNT_ID>'
+export CLOUDFLARE_ACCOUNT_ID='<VERIFIED_32_CHARACTER_ACCOUNT_ID>'
 export EXPECTED_CF_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID"
-PRODUCTION_GATES_ACK=YES ./scripts/deploy.sh migrate-apply
-PRODUCTION_GATES_ACK=YES ./scripts/deploy.sh secrets
-PRODUCTION_GATES_ACK=YES ./scripts/deploy.sh worker-deploy
+INFRA_DEPLOY_APPROVED=YES ./scripts/deploy.sh migrate-apply
+INFRA_DEPLOY_APPROVED=YES ./scripts/deploy.sh worker-deploy
+```
+
+3. In Resend, verify a domain you control using the exact DNS records shown there and create a sending key for that domain. Store the key and a separately generated high entropy admin token in a password manager. The first deployment must exist before `wrangler secret put` is run. Edit `worker/wrangler.jsonc` with the actual `PUBLIC_API_URL` from deploy output, verified `EMAIL_FROM`, and approved `RETENTION_DAYS`. Then enter the two secrets through Wrangler's hidden prompts and deploy the still closed Worker again.
+
+```bash
+INFRA_DEPLOY_APPROVED=YES ./scripts/deploy.sh secrets
+INFRA_DEPLOY_APPROVED=YES ./scripts/deploy.sh worker-deploy
 ./scripts/deploy.sh smoke
 ```
 
-The secrets mode prompts twice; if secrets were already set, use direct `wrangler secret put` only for the one being rotated. Verify the deployed Worker `/health` reports `signups_enabled:false` before controlled synthetic smoke tests. Do not flip the gate for public use until all checks pass.
+`/health` must report `signups_enabled:false`. A secret update on an existing Worker can create a new version; both gates remain false during this stage. Never rely on a secret update to configure the public URL or sender; deploy the reviewed configuration afterward.
 
-To activate after privacy approval and smoke tests, set `PRIVACY_NOTICE_APPROVED=true` and `PUBLIC_SIGNUPS_ENABLED=true` in `worker/wrangler.jsonc`, review the diff, run `PRODUCTION_GATES_ACK=YES ./scripts/deploy.sh worker-deploy`, then `PRODUCTION_GATES_ACK=YES ./scripts/deploy.sh frontend-activate`. Commit and review the frontend changes in the existing PR; only a later merge to `main` publishes GitHub Pages. This task does not authorize merging.
+4. After completing and approving the privacy notice and matching notice versions, set `PRIVACY_NOTICE_APPROVED=true`, keep `PUBLIC_SIGNUPS_ENABLED=false`, and set `SYNTHETIC_TEST_ENABLED=true` in `worker/wrangler.jsonc`. Generate a distinct 32+ character synthetic test token in a password manager. Install it through the hidden prompt before deploying synthetic mode. Approve synthetic testing separately; the test runner prompts for the synthetic and admin tokens without printing them.
 
-## Production smoke sequence
+```bash
+SYNTHETIC_TEST_APPROVED=YES INFRA_DEPLOY_APPROVED=YES ./scripts/deploy.sh synthetic-secret
+SYNTHETIC_TEST_APPROVED=YES INFRA_DEPLOY_APPROVED=YES DEPLOY_STAGE=synthetic ./scripts/deploy.sh worker-deploy
+SYNTHETIC_TEST_APPROVED=YES ./scripts/deploy.sh synthetic-test
+```
 
-Use only synthetic identities and recordings. With the public gate temporarily enabled under controlled conditions, submit one typed request, verify the email by pressing Confirm, inspect rewards, submit a second synthetic referred member, confirm referral credit, redeem one extra submission, test an audio request and private founder download, then delete all synthetic submissions and audio. Check D1 and R2 through approved Cloudflare tools after cleanup; account for immutable ledger/audit tombstones. Restore the gate to `false` if any check fails.
+The test checks closed public registration, typed submission, POST confirmation, referral credit, reward redemption, silent audio upload and private retrieval, founder summary, and authenticated cleanup. The daily Worker schedule also removes synthetic records older than one day. If cleanup fails, use the authenticated `/synthetic/cleanup` endpoint immediately and inspect D1/R2. The test leaves immutable ledger, consent, deletion, and audit tombstones. It sends no real email.
+
+5. After **all** items in [LAUNCH_CHECKLIST.md](LAUNCH_CHECKLIST.md) are complete, set `SYNTHETIC_TEST_ENABLED=false`, `PUBLIC_SIGNUPS_ENABLED=true`, and keep `PRIVACY_NOTICE_APPROVED=true`. Record public launch approval. Deploy the Worker and verify `/health` reports `signups_enabled:true` before preparing the frontend. `frontend-activate` checks the deployed health response and approved notice, then replaces local API placeholders. Commit and review those frontend changes; a later approved merge to `main` publishes GitHub Pages. This engineering task does not authorize that merge.
+
+```bash
+PUBLIC_LAUNCH_APPROVED=YES INFRA_DEPLOY_APPROVED=YES DEPLOY_STAGE=public ./scripts/deploy.sh worker-deploy
+./scripts/deploy.sh smoke
+PUBLIC_LAUNCH_APPROVED=YES INFRA_DEPLOY_APPROVED=YES ./scripts/deploy.sh frontend-activate
+```
+
+If a public rollout must be closed, set both signup and synthetic flags to `false`, review the diff, then run `INFRA_DEPLOY_APPROVED=YES ./scripts/deploy.sh worker-deploy`. Do not reverse D1 migrations automatically.

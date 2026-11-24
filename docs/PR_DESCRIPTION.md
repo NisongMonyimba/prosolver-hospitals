@@ -1,24 +1,22 @@
-## ProSolver Hospitals MVP hardening
+## ProSolver Hospitals MVP predeployment hardening
 
-Completes the local Worker, D1 schema, private audio, email verification, referrals, points, member rewards, founder review, research classification, deletion, retention, CI, and deployment documentation. Public collection remains disabled.
+Completes the remaining engineering blockers on the existing MVP branch while keeping production and public registration closed.
 
-### Key changes
+### Changes
 
-- POST-only human email confirmation with single-use hashed 24-hour tokens and passwordless member sessions.
-- Atomic D1 referral and point accounting, immutable nonnegative ledger, and auditable fraud reversals.
-- Bounded 5 MiB private audio uploads, R2 orphan cleanup, retention and deletion workflows.
-- Founder dashboard with metrics, filters, review, private audio, manual research classification and aggregate export.
-- Safe deployment scripts and prelaunch privacy/production gates. Existing D1 and R2 resources are reused.
+- Allows authenticated same-origin deletion from the rewards page CSP and audits CSP on all static and Worker pages.
+- Fixes browser confirmation after a cross-origin entry when Chrome sends `Origin: null`, limited to Fetch Metadata confirmed same-origin navigation.
+- Adds a bearer authenticated synthetic mode independent of public registration. It requires privacy approval, reserved `example.test` identities, marked content, a canonical silent WAV fixture, and no email delivery. Authenticated and scheduled cleanup erase synthetic submissions and R2 audio.
+- Separates infrastructure, synthetic testing, and public launch approvals. Documents the first Worker deployment before `wrangler secret put` and provides exact founder commands.
+- Adds Chrome browser tests and actual local Wrangler D1/R2 integration, plus new API and CSP tests. Improves session revocation, expired token cleanup, and paginated R2 orphan review.
 
-### Local verification
+### Verification
 
-- 23 API/migration/security tests passed; 0 failed, 0 skipped.
-- 4 Python frontend contract tests passed; 0 failed, 0 skipped; existing static patch check passed.
-- JS and Bash syntax checks passed; Wrangler 4.167.0 dry-run build passed.
-- Offline `npm ci` hit a local sandbox restriction executing esbuild's install script; `npm ci --offline --ignore-scripts` passed and the Worker dry-run succeeded. PR CI performs a standard `npm ci`.
+- 27 Worker API/migration/security tests passed; 5 Python frontend/CSP tests passed; static patch guard passed.
+- Chrome browser flow passed mobile landing, typed form, audio controls, confirmation, sharing, rewards, founder dashboard, deletion, and closed signup.
+- Actual local Wrangler D1 migrations and CRUD and R2 put/get/delete passed. Wrangler dry-run build and JS/Bash syntax passed.
+- No production D1/R2 write, Worker deployment, real email delivery, public signup activation, or PR merge was performed.
 
-### Launch status
+### External gates
 
-**Do not merge or activate for public collection.** The privacy notice still requires operator identity, contact, lawful basis and approval. Resend, Worker secrets, production migrations, remote smoke tests and founder launch gates remain manual. `PUBLIC_SIGNUPS_ENABLED=false` and `PRIVACY_NOTICE_APPROVED=false` by default. No production D1/R2 resource was modified or deployed in this task.
-
-See `docs/LAUNCH_CHECKLIST.md`, `docs/DEPLOYMENT.md`, and `docs/TEST_REPORT.md`.
+Privacy notice/legal approval, Cloudflare account verification, production migrations, first closed Worker deployment, verified Resend sender and secrets, synthetic production smoke and cleanup, real approved email delivery, backup/retention review, and explicit public launch approval remain with the founder. See `docs/DEPLOYMENT.md`, `docs/LAUNCH_CHECKLIST.md`, and `docs/TEST_REPORT.md`.

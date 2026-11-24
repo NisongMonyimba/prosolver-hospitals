@@ -20,7 +20,26 @@ function finish(res, req, env) {
   return res;
 }
 const allowedOrigin = (req,env) => { const origin=req.headers.get('Origin'); return origin === env.SITE_ORIGIN || origin === new URL(req.url).origin; };
-const ready = env => env.PUBLIC_SIGNUPS_ENABLED === 'true' && env.PRIVACY_NOTICE_APPROVED === 'true' && env.SITE_ORIGIN === 'https://nisongmonyimba.github.io' && /^https:\/\/[^/]+\.workers\.dev$/.test(env.PUBLIC_API_URL||'') && !!env.DB && !!env.AUDIO && !!env.RATE && !!env.RESEND_API_KEY && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(env.EMAIL_FROM||'') && !!env.ADMIN_TOKEN;
+// Some browsers send Origin: null for a top-level same-origin form navigation
+// after entering the confirmation page from another site. Fetch Metadata keeps
+// that case distinct from a cross-site form POST.
+const confirmationOrigin = (req,env) => allowedOrigin(req,env) || (req.headers.get('Origin')==='null' && req.headers.get('Sec-Fetch-Site')==='same-origin' && req.headers.get('Sec-Fetch-Mode')==='navigate');
+const ready = env => env.PUBLIC_SIGNUPS_ENABLED === 'true' && env.SYNTHETIC_TEST_ENABLED !== 'true' && env.PRIVACY_NOTICE_APPROVED === 'true' && env.SITE_ORIGIN === 'https://nisongmonyimba.github.io' && /^https:\/\/[^/]+\.workers\.dev$/.test(env.PUBLIC_API_URL||'') && !!env.DB && !!env.AUDIO && !!env.RATE && !!env.RESEND_API_KEY && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(env.EMAIL_FROM||'') && !!env.ADMIN_TOKEN;
+// The test credential is a separate secret. The public gate must stay closed.
+async function syntheticAuth(req,env){
+  if(env.SYNTHETIC_TEST_ENABLED!=='true'||env.PUBLIC_SIGNUPS_ENABLED!=='false'||env.PRIVACY_NOTICE_APPROVED!=='true'||!env.SYNTHETIC_TEST_TOKEN||env.SYNTHETIC_TEST_TOKEN.length<32)return false;
+  const candidate=(req.headers.get('authorization')||'').replace(/^Bearer /,'');
+  if(!candidate||candidate.length>256)return false;
+  const a=await sha(candidate),b=await sha(env.SYNTHETIC_TEST_TOKEN);let mismatch=0;
+  for(let i=0;i<a.length;i++)mismatch|=a.charCodeAt(i)^b.charCodeAt(i);
+  return mismatch===0;
+}
+function syntheticAudio(bytes,mime){
+  if(mime!=='audio/wav'||bytes.byteLength!==8044)return false;
+  const b=new Uint8Array(bytes),v=new DataView(bytes);
+  if(String.fromCharCode(...b.slice(0,4))!=='RIFF'||v.getUint32(4,true)!==8036||String.fromCharCode(...b.slice(8,16))!=='WAVEfmt '||v.getUint32(16,true)!==16||v.getUint16(20,true)!==1||v.getUint16(22,true)!==1||v.getUint32(24,true)!==8000||v.getUint32(28,true)!==8000||v.getUint16(32,true)!==1||v.getUint16(34,true)!==8||String.fromCharCode(...b.slice(36,40))!=='data'||v.getUint32(40,true)!==8000)return false;
+  return b.subarray(44).every(x=>x===128);
+}
 async function limit(env,key) { if(!env.RATE) return false; try{return (await env.RATE.limit({key})).success;}catch{return false;} }
 async function boundedForm(req) {
   const len=Number(req.headers.get('content-length'));
@@ -52,7 +71,8 @@ async function cooldown(env,email) {
   return {allowed:result.meta.changes===1,hash};
 }
 async function submit(req,env) {
-  if(!ready(env))return error('Registration is not open yet.',503);
+  const synthetic=await syntheticAuth(req,env);
+  if(!synthetic&&!ready(env))return error('Registration is not open yet.',503);
   if(!allowedOrigin(req,env))return error('Request origin is not permitted.',403);
   if(!await limit(env,'submit:'+ (req.headers.get('CF-Connecting-IP')||'unknown')))return error('Too many attempts. Please try later.',429);
   let f;try{f=await boundedForm(req);}catch(e){return error(e.message==='large'?'Submission exceeds the upload limit.':'Invalid form data.',e.message==='large'?413:400);}
@@ -64,6 +84,7 @@ async function submit(req,env) {
   const requestKey=text(f.get('request_key'),64);
   const audio=f.get('audio');
   if(!email || !phone)return error('Enter a valid email and international phone number beginning with +.');
+  if(synthetic&&(!/^smoke-[a-z0-9][a-z0-9._+-]*@example\.test$/.test(email)||!/^\+999\d{7,12}$/.test(phone)||!problem.startsWith('[SYNTHETIC]')||(daily&&!daily.startsWith('[SYNTHETIC]'))))return error('Synthetic identity and marked content required.',400);
   if(problem===null || daily===null || (ref && !/^[A-F0-9]{18}$/.test(ref)))return error('Check the problem and referral fields.');
   if(consent!=='yes' || notice!==NOTICE)return error('Please accept the current privacy and contact notice.');
   if(!requestKey || !/^[a-f0-9-]{36}$/.test(requestKey))return error('Please refresh the form and try again.');
@@ -73,12 +94,14 @@ async function submit(req,env) {
     if(audio.size>MAX_AUDIO)return error('Audio must be at most 5 MiB.',413);
     bytes=await audio.arrayBuffer();mime=audioType(bytes,audio.type.split(';')[0]);
     if(!mime)return error('Unsupported or invalid audio recording.');
+    if(synthetic&&!syntheticAudio(bytes,mime))return error('Only the canonical silent test recording is permitted.',400);
   }
   if(!problem && !bytes)return error('Type or record a problem.');
   const oldRequest=await env.DB.prepare('SELECT id FROM submissions WHERE request_key=?').bind(requestKey).first();
   if(oldRequest)return json({ok:true,status:'pending_verification'},202);
   const memberId=uid(), referralCode=random(9).toUpperCase(), submissionId=uid(), token=random(), tokenHash=await sha(token);
   const existing=await env.DB.prepare('SELECT id,verified_at,phone,deleted_at FROM members WHERE email=?').bind(email).first();
+  if(synthetic&&ref){const target=await env.DB.prepare('SELECT email FROM members WHERE referral_code=? AND deleted_at IS NULL').bind(ref).first();if(!target?.email.match(/^smoke-[a-z0-9][a-z0-9._+-]*@example\.test$/))return error('Synthetic referral required.',400);}
   if(existing?.deleted_at)return error('Unable to accept this request. Contact the operator.',409);
   if(existing && existing.phone!==phone)return error('Unable to accept this request. Contact the operator.',409);
   if(existing?.verified_at){
@@ -97,7 +120,7 @@ async function submit(req,env) {
       env.DB.prepare("INSERT INTO consent_events(id,member_id,submission_id,notice_version,contact_consent,created_at) SELECT ?,?,id,?,1,datetime('now') FROM submissions WHERE id=?").bind(uid(),id,NOTICE,submissionId)
     ]);
     if(batch[0].meta.changes!==1)throw new Error('eligibility');
-    await sendEmail(env,email,token);
+    if(!synthetic)await sendEmail(env,email,token);
   }catch(e){
     await env.DB.prepare('DELETE FROM consent_events WHERE submission_id=?').bind(submissionId).run().catch(()=>{});
     await env.DB.prepare('DELETE FROM submissions WHERE id=? AND verified_at IS NULL').bind(submissionId).run().catch(()=>{});
@@ -106,14 +129,14 @@ async function submit(req,env) {
     if(e.message==='eligibility')return error('An unverified request is already pending, or no submission credit is available.',409);
     return error('Submission could not be completed. Please retry later.',503);
   }
-  return json({ok:true,status:'pending_verification'},202);
+  return json(synthetic?{ok:true,status:'pending_verification',test_token:token}:{ok:true,status:'pending_verification'},202);
 }
 function landing(title,action,token) {
   const safe=/^[a-f0-9]{64}$/.test(token||'')?token:'';
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${title}</title><style>body{font:16px system-ui;max-width:34rem;margin:5rem auto;padding:1rem;color:#14283e}button{background:#1769df;color:white;border:0;border-radius:8px;padding:1rem;cursor:pointer}</style></head><body><h1>${title}</h1><p>Press Confirm to continue. This link expires after 24 hours and works once.</p><form method="POST" action="${action}"><input type="hidden" name="token" value="${safe}"><button type="submit">Confirm</button></form></body></html>`,{headers:{'content-type':'text/html; charset=utf-8','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"}});
 }
 async function confirm(req,env,access=false) {
-  if(!allowedOrigin(req,env))return error('Request origin is not permitted.',403);
+  if(!confirmationOrigin(req,env))return error('Request origin is not permitted.',403);
   let f;try{f=await boundedForm(req);}catch(e){return error(e.message==='large'?'Request is too large.':'Invalid form data.',e.message==='large'?413:400);}
   const token=f.get('token');
   if(typeof token!=='string'|| !/^[a-f0-9]{64}$/.test(token))return error('Invalid or expired link.',400);
@@ -153,7 +176,7 @@ async function rewards(req,env){
   const stats=await env.DB.prepare("SELECT (SELECT COUNT(*) FROM referrals r WHERE referrer_id=? AND NOT EXISTS(SELECT 1 FROM referral_reversals x WHERE x.referred_id=r.referred_id)) verified_referrals,(SELECT COUNT(*) FROM members m WHERE m.referrer_code=? AND m.verified_at IS NULL AND m.deleted_at IS NULL) pending_referrals,(SELECT COALESCE(SUM(CASE WHEN delta>0 THEN delta ELSE 0 END),0) FROM ledger WHERE member_id=?) earned,(SELECT COALESCE(SUM(CASE WHEN reason='extra_submission' THEN -delta ELSE 0 END),0) FROM ledger WHERE member_id=?) redeemed,(SELECT COALESCE(SUM(delta),0) FROM ledger WHERE member_id=?) balance").bind(member.id,member.referral_code,member.id,member.id,member.id).first();
   const link=env.SITE_ORIGIN+SITE_PATH+'?ref='+member.referral_code;
   const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Your ProSolver rewards</title><style>body{font:16px 'IBM Plex Sans',system-ui;max-width:40rem;margin:4rem auto;padding:1rem;color:#14283e}input{width:100%;padding:.8rem;box-sizing:border-box}button,a.button{display:inline-block;background:#1769df;color:white;border:0;border-radius:8px;padding:.8rem;margin:.5rem 0;text-decoration:none}</style></head><body><h1>Your waitlist rewards</h1><p>Email verified. Your referral link:</p><input id="link" readonly value="${escape(link)}"><button id="copy">Copy link</button><button id="share">Share</button><a class="button" href="https://wa.me/?text=${encodeURIComponent(link)}" rel="noreferrer">Share on WhatsApp</a><p>Verified referrals: ${stats.verified_referrals} · pending: ${stats.pending_referrals}</p><p>Points earned: ${stats.earned} · redeemed: ${stats.redeemed} · available: ${stats.balance}</p><p>Available additional submission credits: ${stats.balance}. Each credit is consumed when that submission is verified. Points have no cash value and do not guarantee resolution.</p><a href="/submit-again">Submit another problem</a><p><button id="delete">Delete my data</button></p><script>document.getElementById('copy').onclick=()=>navigator.clipboard.writeText(document.getElementById('link').value);document.getElementById('share').onclick=()=>{const url=document.getElementById('link').value;if(navigator.share)navigator.share({title:'ProSolver Hospitals',url});else navigator.clipboard.writeText(url);};document.getElementById('delete').onclick=async()=>{if(!confirm('Delete your account contact and submissions, including voice notes?'))return;const r=await fetch('/me/delete',{method:'POST'});if(r.ok)location.href='/';else alert('Deletion failed. Please contact the operator.');};</script></body></html>`,{headers:{'content-type':'text/html; charset=utf-8','content-security-policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"}});
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Your ProSolver rewards</title><style>body{font:16px 'IBM Plex Sans',system-ui;max-width:40rem;margin:4rem auto;padding:1rem;color:#14283e}input{width:100%;padding:.8rem;box-sizing:border-box}button,a.button{display:inline-block;background:#1769df;color:white;border:0;border-radius:8px;padding:.8rem;margin:.5rem 0;text-decoration:none}</style></head><body><h1>Your waitlist rewards</h1><p>Email verified. Your referral link:</p><input id="link" readonly value="${escape(link)}"><button id="copy">Copy link</button><button id="share">Share</button><a class="button" href="https://wa.me/?text=${encodeURIComponent(link)}" rel="noreferrer">Share on WhatsApp</a><p>Verified referrals: ${stats.verified_referrals} · pending: ${stats.pending_referrals}</p><p>Points earned: ${stats.earned} · redeemed: ${stats.redeemed} · available: ${stats.balance}</p><p>Available additional submission credits: ${stats.balance}. Each credit is consumed when that submission is verified. Points have no cash value and do not guarantee resolution.</p><a href="/submit-again">Submit another problem</a><p><button id="delete">Delete my data</button></p><script>document.getElementById('copy').onclick=()=>navigator.clipboard.writeText(document.getElementById('link').value);document.getElementById('share').onclick=()=>{const url=document.getElementById('link').value;if(navigator.share)navigator.share({title:'ProSolver Hospitals',url});else navigator.clipboard.writeText(url);};document.getElementById('delete').onclick=async()=>{if(!confirm('Delete your account contact and submissions, including voice notes?'))return;const r=await fetch('/me/delete',{method:'POST'});if(r.ok)location.href='/';else alert('Deletion failed. Please contact the operator.');};</script></body></html>`,{headers:{'content-type':'text/html; charset=utf-8','content-security-policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"}});
 }
 async function submitAgain(req,env){
   const member=await memberSession(req,env);
@@ -161,21 +184,33 @@ async function submitAgain(req,env){
   const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Submit another problem</title><style>body{font:16px system-ui;max-width:36rem;margin:3rem auto;padding:1rem;color:#14283e}textarea,input{width:100%;box-sizing:border-box;padding:.8rem;margin:.5rem 0}button{background:#1769df;color:white;border:0;border-radius:8px;padding:.8rem}</style></head><body><h1>Submit another problem</h1><p>One available point permits an additional verified submission. It is consumed after email verification.</p><form id="f"><label>Problem<textarea name="problem" maxlength="5000"></textarea></label><label>Daily challenges (optional)<textarea name="daily" maxlength="5000"></textarea></label><label>Voice note (optional)<input type="file" name="audio" accept="audio/webm,audio/ogg,audio/mp4,audio/wav,audio/mpeg"></label><input type="hidden" name="email" value="${escape(member.email)}"><input type="hidden" name="phone" value="${escape(member.phone)}"><input type="hidden" name="notice_version" value="${NOTICE}"><input type="hidden" name="consent" value="yes"><p><label><input type="checkbox" id="c" required> I accept the current privacy and contact notice.</label></p><button>Submit</button></form><p id="message" role="status"></p><a href="/rewards">Back to rewards</a><script>const f=document.getElementById('f');f.onsubmit=async e=>{e.preventDefault();const d=new FormData(f);d.append('request_key',crypto.randomUUID());const b=f.querySelector('button');b.disabled=true;try{const r=await fetch('/submit',{method:'POST',body:d});const v=await r.json();document.getElementById('message').textContent=r.ok?'Check your email and press Confirm to verify this problem.':v.error;}catch{document.getElementById('message').textContent='Submission failed. Please retry.';}finally{b.disabled=false;}};</script></body></html>`,{headers:{'content-type':'text/html; charset=utf-8','content-security-policy':"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; form-action 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"}});
 }
-async function memberDelete(req,env){
-  if(!allowedOrigin(req,env))return error('Origin not permitted.',403);
-  const member=await memberSession(req,env);if(!member)return error('Access required.',401);
-  const rows=await env.DB.prepare('SELECT id,audio_key FROM submissions WHERE member_id=? AND deleted_at IS NULL').bind(member.id).all();
+async function eraseMember(env,memberId,reason){
+  const rows=await env.DB.prepare('SELECT id,audio_key FROM submissions WHERE member_id=? AND deleted_at IS NULL').bind(memberId).all();
   for(const row of rows.results){if(row.audio_key)await env.AUDIO.delete(row.audio_key);}
   const commands=[];
   for(const row of rows.results){
     commands.push(env.DB.prepare("UPDATE submissions SET problem='',daily='',founder_notes='',audio_key=NULL,verification_hash=NULL,deleted_at=datetime('now') WHERE id=?").bind(row.id));
-    commands.push(env.DB.prepare("INSERT INTO deletion_events(id,member_id,submission_id,audio_key,status,reason,created_at) VALUES(?,?,?,?, 'completed','member_request',datetime('now'))").bind(uid(),member.id,row.id,row.audio_key));
+    commands.push(env.DB.prepare("INSERT INTO deletion_events(id,member_id,submission_id,audio_key,status,reason,created_at) VALUES(?,?,?,?, 'completed',?,datetime('now'))").bind(uid(),memberId,row.id,row.audio_key,reason));
   }
-  commands.push(env.DB.prepare("UPDATE members SET email=?,phone='',deleted_at=datetime('now') WHERE id=?").bind('deleted+'+member.id+'@invalid.local',member.id));
-  commands.push(env.DB.prepare('DELETE FROM sessions WHERE member_id=?').bind(member.id));
-  commands.push(env.DB.prepare('DELETE FROM access_tokens WHERE member_id=?').bind(member.id));
+  commands.push(env.DB.prepare("UPDATE members SET email=?,phone='',deleted_at=datetime('now') WHERE id=?").bind('deleted+'+memberId+'@invalid.local',memberId));
+  commands.push(env.DB.prepare('DELETE FROM sessions WHERE member_id=?').bind(memberId));
+  commands.push(env.DB.prepare('DELETE FROM access_tokens WHERE member_id=?').bind(memberId));
   await env.DB.batch(commands);
-  return json({ok:true});
+}
+async function memberDelete(req,env){
+  if(!allowedOrigin(req,env))return error('Origin not permitted.',403);
+  const member=await memberSession(req,env);if(!member)return error('Access required.',401);
+  await eraseMember(env,member.id,'member_request');
+  const response=json({ok:true});
+  response.headers.set('set-cookie','ps_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0');
+  return response;
+}
+async function syntheticCleanup(req,env){
+  if(!await syntheticAuth(req,env))return error('Unauthorized.',401);
+  if(!allowedOrigin(req,env))return error('Origin not permitted.',403);
+  const members=await env.DB.prepare("SELECT id FROM members WHERE email LIKE 'smoke-%@example.test' AND phone LIKE '+999%' AND deleted_at IS NULL LIMIT 100").all();
+  for(const member of members.results)await eraseMember(env,member.id,'synthetic_cleanup');
+  return json({ok:true,deleted_members:members.results.length,more:members.results.length===100});
 }
 async function access(req,env){
   if(!ready(env))return error('Registration is not open yet.',503);
@@ -304,12 +339,21 @@ async function cleanup(env){
   await env.DB.prepare("UPDATE members SET email='deleted+'||id||'@invalid.local',phone='',deleted_at=datetime('now') WHERE deleted_at IS NULL AND created_at<datetime('now',?) AND NOT EXISTS(SELECT 1 FROM submissions s WHERE s.member_id=members.id AND s.deleted_at IS NULL)").bind('-'+days+' days').run();
   await env.DB.prepare("DELETE FROM sessions WHERE expires_at<datetime('now')").run();
   await env.DB.prepare("DELETE FROM access_tokens WHERE expires_at<datetime('now')").run();
-  let orphaned=0;
-  const listing=await env.AUDIO.list({prefix:'private/',limit:100});
-  for(const object of listing.objects){
-    if(Date.now()-new Date(object.uploaded).getTime()<86400000)continue;
-    const linked=await env.DB.prepare('SELECT id FROM submissions WHERE audio_key=? AND deleted_at IS NULL').bind(object.key).first();
-    if(!linked){await env.AUDIO.delete(object.key);orphaned++;}
+  await env.DB.prepare("DELETE FROM send_cooldowns WHERE sent_at<datetime('now','-2 days')").run();
+  await env.DB.prepare('DELETE FROM sessions WHERE member_id IN (SELECT id FROM members WHERE deleted_at IS NOT NULL)').run();
+  await env.DB.prepare('DELETE FROM access_tokens WHERE member_id IN (SELECT id FROM members WHERE deleted_at IS NOT NULL)').run();
+  const oldSynthetic=await env.DB.prepare("SELECT id FROM members WHERE email LIKE 'smoke-%@example.test' AND phone LIKE '+999%' AND created_at<datetime('now','-1 day') AND deleted_at IS NULL LIMIT 100").all();
+  for(const member of oldSynthetic.results)await eraseMember(env,member.id,'synthetic_retention');
+  let orphaned=0,cursor;
+  for(let page=0;page<10;page++){
+    const listing=await env.AUDIO.list({prefix:'private/',limit:1000,...(cursor?{cursor}:{})});
+    for(const object of listing.objects){
+      if(Date.now()-new Date(object.uploaded).getTime()<86400000)continue;
+      const linked=await env.DB.prepare('SELECT id FROM submissions WHERE audio_key=? AND deleted_at IS NULL').bind(object.key).first();
+      if(!linked){await env.AUDIO.delete(object.key);orphaned++;}
+    }
+    if(!listing.truncated||!listing.cursor)break;
+    cursor=listing.cursor;
   }
   return json({ok:true,expired_pending:pending.results.length,orphaned_audio:orphaned});
 }
@@ -329,6 +373,7 @@ export default {
       else if(req.method==='GET'&&url.pathname==='/rewards')res=await rewards(req,env);
       else if(req.method==='GET'&&url.pathname==='/submit-again')res=await submitAgain(req,env);
       else if(req.method==='POST'&&url.pathname==='/me/delete')res=await memberDelete(req,env);
+      else if(req.method==='POST'&&url.pathname==='/synthetic/cleanup')res=await syntheticCleanup(req,env);
       else if(url.pathname.startsWith('/admin/'))res=await admin(req,env,url);
       else res=error('Not found.',404);
       return finish(res,req,env);

@@ -1,6 +1,6 @@
 # Rollback
 
-The fastest containment action is to set `PUBLIC_SIGNUPS_ENABLED=false` in `worker/wrangler.jsonc`, review the change and deploy the Worker with the production confirmation mode. This stops new public submissions while preserving existing records. If email is compromised, rotate `RESEND_API_KEY`; if founder access is compromised, rotate `ADMIN_TOKEN` in Cloudflare and the password manager.
+The fastest containment action is to set `PUBLIC_SIGNUPS_ENABLED=false` and `SYNTHETIC_TEST_ENABLED=false` in `worker/wrangler.jsonc`, review the change and deploy the Worker with `INFRA_DEPLOY_APPROVED=YES ./scripts/deploy.sh worker-deploy`. This stops new submissions while preserving existing records. If email is compromised, rotate `RESEND_API_KEY`; if founder access is compromised, rotate `ADMIN_TOKEN` in Cloudflare and the password manager. Rotate `SYNTHETIC_TEST_TOKEN` if test access is compromised.
 
 For a Worker code regression, revert only the relevant code commit on the feature branch, run CI and dry-run build, then deploy the reviewed prior Worker. Never force-push. GitHub Pages can be rolled back by a normal revert to the last reviewed `main` commit; do not publish the feature branch directly.
 

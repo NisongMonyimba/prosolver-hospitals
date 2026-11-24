@@ -15,12 +15,14 @@ npm run build:dry
 cd ..
 python3 tests/test_patch.py
 python3 -m unittest discover -s tests -p 'test_*.py'
+python3 -m pip install websockets==17.1
+python3 tests/browser_smoke.py
 ```
 
-The API tests use an in-memory SQLite D1 adapter, a Map-based private R2 simulation and mocked Resend. The installed Wrangler dry-run validates configuration without deployment. A local Wrangler D1 invocation could not start its loopback listener in this restricted environment; migration SQL was executed by the SQLite harness.
+The API tests use an in-memory SQLite D1 adapter, a Map-based private R2 simulation and mocked Resend. The Chrome browser suite also starts Wrangler with temporary **local** D1 and R2 state, applies real local D1 migrations, and verifies R2 put/get/delete without remote resources or email delivery. It requires local loopback access and Chrome with its sandbox enabled.
 
 ## Operations
 
-Read [deployment steps](docs/DEPLOYMENT.md), [launch gates](docs/LAUNCH_CHECKLIST.md), and [privacy requirements](docs/PRIVACY_CHECKLIST.md) before any production action. `scripts/deploy.sh` has separate read-only and explicit production-changing modes. `worker/setup-cloudflare.sh` now checks existing resources and never creates them.
+Read [deployment steps](docs/DEPLOYMENT.md), [launch gates](docs/LAUNCH_CHECKLIST.md), and [privacy requirements](docs/PRIVACY_CHECKLIST.md) before any production action. `scripts/deploy.sh` separates infrastructure, synthetic testing and public launch approvals. `worker/setup-cloudflare.sh` only checks existing resources and never creates them.
 
 The GitHub Pages workflow publishes only `main`. The feature branch PR runs CI but is not published.

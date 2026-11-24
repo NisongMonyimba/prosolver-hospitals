@@ -37,3 +37,9 @@ jobs:
         working-directory: worker
         env:
           WRANGLER_SEND_METRICS: 'false'
+      - name: Browser and local Wrangler D1/R2 smoke
+        run: |
+          python3 -m pip install websockets==17.1
+          python3 tests/browser_smoke.py
+        env:
+          WRANGLER_SEND_METRICS: 'false'

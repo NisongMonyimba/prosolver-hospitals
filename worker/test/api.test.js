@@ -270,3 +270,86 @@ test('scheduled retention deletes old audio and anonymizes inactive contact',asy
     assert.equal(x.sqlite.prepare('SELECT phone FROM members').get().phone,'');
   }finally{x.restore();}
 });
+function silentWav(){
+  const b=new Uint8Array(8044),v=new DataView(b.buffer);
+  b.set(Buffer.from('RIFF'),0);v.setUint32(4,8036,true);b.set(Buffer.from('WAVEfmt '),8);
+  v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,8000,true);v.setUint32(28,8000,true);v.setUint16(32,1,true);v.setUint16(34,8,true);
+  b.set(Buffer.from('data'),36);v.setUint32(40,8000,true);b.fill(128,44);return b;
+}
+test('restricted synthetic flow keeps public registration shut and never sends email',async()=>{
+  const x=fixture();try{
+    Object.assign(x.env,{PUBLIC_SIGNUPS_ENABLED:'false',SYNTHETIC_TEST_ENABLED:'true',SYNTHETIC_TEST_TOKEN:'test-secret-with-at-least-32-characters'});
+    const fields={email:'smoke-a@example.test',phone:'+99900000001',problem:'[SYNTHETIC] Equipment issue'};
+    const auth={Origin:api,Authorization:'Bearer '+x.env.SYNTHETIC_TEST_TOKEN};
+    assert.equal((await x.post('/submit',x.form(fields))).status,503);
+    assert.equal((await x.call('/submit','POST',x.form(fields),{...auth,Authorization:'Bearer wrong'})).status,503);
+    x.env.PRIVACY_NOTICE_APPROVED='false';
+    assert.equal((await x.call('/submit','POST',x.form(fields),auth)).status,503);
+    x.env.PRIVACY_NOTICE_APPROVED='true';
+    for(const bad of [{email:'real@example.org'},{phone:'+233555000111'},{problem:'Real content'},{daily:'Unmarked daily'}]){
+      assert.equal((await x.call('/submit','POST',x.form({...fields,...bad}),auth)).status,400);
+    }
+    const first=await x.call('/submit','POST',x.form(fields),auth);
+    assert.equal(first.status,202);
+    const firstToken=(await first.json()).test_token;
+    assert.match(firstToken,/^[a-f0-9]{64}$/);
+    assert.equal(x.emails.length,0);
+    const session=await x.confirm('/verify',firstToken),cookie=session.headers.get('set-cookie').split(';')[0];
+    const code=x.sqlite.prepare("SELECT referral_code FROM members WHERE email='smoke-a@example.test'").get().referral_code;
+    const second=await x.call('/submit','POST',x.form({email:'smoke-b@example.test',phone:'+99900000002',problem:'[SYNTHETIC] Referral',ref:code}),auth);
+    assert.equal(second.status,202);await x.confirm('/verify',(await second.json()).test_token);
+    const audio=x.form({...fields,problem:'[SYNTHETIC] Silent WAV'});
+    audio.append('audio',new File([silentWav()],'silence.wav',{type:'audio/wav'}));
+    const audioSubmit=await x.call('/submit','POST',audio,{...auth,Cookie:cookie});
+    assert.equal(audioSubmit.status,202);
+    await x.confirm('/verify',(await audioSubmit.json()).test_token);
+    assert.equal(x.objects.size,1);
+    assert.equal(x.emails.length,0);
+    assert.equal((await x.call('/synthetic/cleanup','POST',null,{Origin:api})).status,401);
+    const cleaned=await x.call('/synthetic/cleanup','POST',null,auth);
+    assert.equal((await cleaned.json()).deleted_members,2);
+    assert.equal(x.objects.size,0);
+    assert.equal(x.sqlite.prepare("SELECT COUNT(*) n FROM members WHERE deleted_at IS NULL").get().n,0);
+    assert.equal((await x.call('/rewards','GET',null,{Cookie:cookie})).status,401);
+  }finally{x.restore();}
+});
+test('synthetic mode rejects arbitrary audio and expires without public launch',async()=>{
+  const x=fixture();try{
+    Object.assign(x.env,{PUBLIC_SIGNUPS_ENABLED:'false',SYNTHETIC_TEST_ENABLED:'true',SYNTHETIC_TEST_TOKEN:'test-secret-with-at-least-32-characters'});
+    const auth={Origin:api,Authorization:'Bearer '+x.env.SYNTHETIC_TEST_TOKEN};
+    const fields={email:'smoke-expiry@example.test',phone:'+99900000003',problem:'[SYNTHETIC] Test'};
+    const audio=x.form(fields);audio.append('audio',new File([new Uint8Array([0x1a,0x45,0xdf,0xa3,1])],'voice.webm',{type:'audio/webm'}));
+    assert.equal((await x.call('/submit','POST',audio,auth)).status,400);
+    const submitted=await x.call('/submit','POST',x.form(fields),auth);
+    assert.equal(submitted.status,202);
+    x.sqlite.prepare("UPDATE members SET created_at=datetime('now','-2 days')").run();
+    await worker.scheduled({},x.env);
+    assert.equal(x.sqlite.prepare('SELECT phone FROM members').get().phone,'');
+    assert.equal(x.sqlite.prepare('SELECT problem FROM submissions').get().problem,'');
+    x.env.PUBLIC_SIGNUPS_ENABLED='true';
+    assert.equal((await x.post('/submit',x.form())).status,503);
+  }finally{x.restore();}
+});
+test('Worker page CSP allows only required same-origin requests',async()=>{
+  const x=fixture();try{
+    await x.post('/submit',x.form());const session=await x.confirm();
+    const cookie=session.headers.get('set-cookie').split(';')[0];
+    const rewards=await x.call('/rewards','GET',null,{Cookie:cookie});
+    assert.match(rewards.headers.get('content-security-policy'),/connect-src 'self'/);
+    assert.match(rewards.headers.get('content-security-policy'),/default-src 'none'/);
+    assert.match(rewards.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+    assert.match((await x.call('/submit-again','GET',null,{Cookie:cookie})).headers.get('content-security-policy'),/connect-src 'self'/);
+    assert.match((await x.call('/verify','GET')).headers.get('content-security-policy'),/form-action 'self'/);
+    assert.equal((await x.call('/me/delete','POST',null,{Origin:api,Cookie:cookie})).status,200);
+  }finally{x.restore();}
+});
+test('confirmation accepts browser same-origin navigation with null Origin but rejects cross-site',async()=>{
+  const x=fixture();try{
+    await x.post('/submit',x.form());const token=x.token();
+    const form=new FormData();form.append('token',token);
+    assert.equal((await x.call('/verify','POST',form,{Origin:'null','Sec-Fetch-Site':'cross-site','Sec-Fetch-Mode':'navigate'})).status,403);
+    assert.equal((await x.call('/verify','POST',form,{Origin:'null','Sec-Fetch-Site':'same-origin','Sec-Fetch-Mode':'cors'})).status,403);
+    assert.equal((await x.call('/verify','POST',form,{Origin:'null','Sec-Fetch-Site':'same-origin','Sec-Fetch-Mode':'navigate'})).status,303);
+  }finally{x.restore();}
+});

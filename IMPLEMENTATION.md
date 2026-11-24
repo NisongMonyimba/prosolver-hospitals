@@ -7,11 +7,11 @@
 - Explicit POST email verification with hashed, expiring, single-use tokens; passwordless member sessions; resend/access links with cooldown.
 - Referral accounting and immutable, nonnegative points ledger. One first verified submission is free; a later verified submission consumes one point. Fraud reversal writes a compensating ledger entry.
 - Member rewards page and same-origin additional-submission form; founder dashboard with filters, review, categories, research classification, aggregate export, private audio and deletion.
-- Daily retention cleanup and private R2 orphan reconciliation; PR CI and deployment scripts.
+- Daily retention cleanup and private R2 orphan reconciliation; restricted authenticated synthetic testing with public signup closed; separate deployment approvals; PR CI and deployment scripts.
 
 ## Tested locally
 
-See [test report](docs/TEST_REPORT.md). Synthetic data only. Local SQLite tests cover migrations and Worker request flows. Wrangler dry-run builds the Worker. No browser-based mobile visual test or remote Cloudflare smoke test has run.
+See [test report](docs/TEST_REPORT.md). Synthetic data only. Local SQLite and actual local Wrangler D1/R2 tests cover migrations and Worker request flows. Chrome tests mobile and member/founder browser flows. Wrangler dry-run builds the Worker. No remote Cloudflare smoke test has run.
 
 ## Requires manual configuration
 
