@@ -1,0 +1,1 @@
+{"name":"prosolver-hospitals-api","private":true,"type":"module","scripts":{"dev":"wrangler dev","test":"node test/api.test.js","test:syntax":"node --check src/index.js","build:dry":"wrangler deploy --dry-run --outdir ../.build/worker"},"devDependencies":{"wrangler":"4.167.0"}}

@@ -1,0 +1,45 @@
+name: Pull request checks
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install locked dependencies
+        run: npm ci
+        working-directory: worker
+      - name: Syntax and static checks
+        run: |
+          node --check public/live.js
+          node --check public/admin.js
+          node --check worker/src/index.js
+          python3 tests/test_patch.py
+          python3 -m unittest discover -s tests -p 'test_*.py'
+          bash -n activate-frontend.sh scripts/deploy.sh worker/setup-cloudflare.sh
+      - name: API, migration and security tests
+        run: npm test
+        working-directory: worker
+      - name: Worker dry-run build
+        run: npm run build:dry
+        working-directory: worker
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+      - name: Browser and local Wrangler D1/R2 smoke
+        run: |
+          python3 -m pip install websockets==17.1
+          python3 tests/browser_smoke.py
+        env:
+          WRANGLER_SEND_METRICS: 'false'

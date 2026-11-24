@@ -1,11 +1,28 @@
 # ProSolver Hospitals
 
-A static, mobile-friendly demo landing page for hospital professionals to describe or record problems. It illustrates an email/phone waitlist and a post-submission referral flow.
+Human-led hospital problem discovery and waitlist MVP. GitHub Pages serves the landing page; a Cloudflare Worker handles submissions, verification, rewards, founder review and retention. D1 holds private records, R2 holds private audio, and Resend sends verification links. This project is separate from Trivsel.
 
-**IMPORTANT: DEMO ONLY.** GitHub Pages hosts static files, not a secure backend. No real problem, email, phone number or audio is saved by the submission form. Referral links and points are illustrative and not verified or credited.
+**Prelaunch:** public collection is disabled by `PUBLIC_SIGNUPS_ENABLED=false` and `PRIVACY_NOTICE_APPROVED=false`. The privacy notice is a draft. No production migration, deployment, email delivery or activation was performed during this engineering task.
 
-Before collecting real user data, implement a secure backend, validated consent/privacy notice, private audio storage, spam prevention, verified referrals, and a server-side points ledger. See `LAUNCH_NOTES.md`.
+## Local checks
 
-## Deployments
+```bash
+cd worker
+npm ci
+npm test
+npm run test:syntax
+npm run build:dry
+cd ..
+python3 tests/test_patch.py
+python3 -m unittest discover -s tests -p 'test_*.py'
+python3 -m pip install websockets==17.1
+python3 tests/browser_smoke.py
+```
 
-Push to `main`. The workflow `.github/workflows/deploy-pages.yml` publishes the site with GitHub Pages. Check the repository Actions tab for deployment status.
+The API tests use an in-memory SQLite D1 adapter, a Map-based private R2 simulation and mocked Resend. The Chrome browser suite also starts Wrangler with temporary **local** D1 and R2 state, applies real local D1 migrations, and verifies R2 put/get/delete without remote resources or email delivery. It requires local loopback access and Chrome with its sandbox enabled.
+
+## Operations
+
+Read [deployment steps](docs/DEPLOYMENT.md), [launch gates](docs/LAUNCH_CHECKLIST.md), and [privacy requirements](docs/PRIVACY_CHECKLIST.md) before any production action. `scripts/deploy.sh` separates infrastructure, synthetic testing and public launch approvals. `worker/setup-cloudflare.sh` only checks existing resources and never creates them.
+
+The GitHub Pages workflow publishes only `main`. The feature branch PR runs CI but is not published.
