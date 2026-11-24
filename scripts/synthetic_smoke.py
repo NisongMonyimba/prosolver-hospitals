@@ -115,6 +115,6 @@ try:
 finally:
     status, _, raw = request('/synthetic/cleanup', 'POST', b'', auth=test_token)
     if status != 200:
-        print('Synthetic cleanup failed; run the authenticated cleanup endpoint immediately.', file=sys.stderr)
+        raise RuntimeError('Synthetic cleanup failed; run the authenticated cleanup endpoint immediately.')
     else:
         print('Authenticated synthetic cleanup completed.')
