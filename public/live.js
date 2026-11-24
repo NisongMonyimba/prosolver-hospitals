@@ -1,80 +1,81 @@
 (() => {
   'use strict';
-  const $ = id => document.getElementById(id);
-  const form = $('waitlistForm'), button = $('record'), output = $('recordStatus'), playback = $('playback');
-  const error = $('error');
-  let recorder, stream, audioBlob, audioURL, stopTimer;
-  const cfg = document.querySelector('meta[name="prosolver-api"]')?.content || '';
-  const api = cfg.replace(/\/$/, '');
-  const q = new URLSearchParams(location.search);
-  const referralCode = (q.get('ref') || '').replace(/[^a-z0-9]/gi,'').slice(0,24).toUpperCase();
-  function fail(message){ error.textContent=message; error.classList.remove('hidden'); }
-  function clear(){error.textContent='';error.classList.add('hidden');}
-  function resetMedia(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}clearTimeout(stopTimer);}
-  function stop(){if(recorder?.state==='recording') recorder.stop();}
-  button.addEventListener('click', async ()=>{
+  const $=id=>document.getElementById(id);
+  const api=(document.querySelector('meta[name="prosolver-api"]')?.content||'').replace(/\/$/,'');
+  const notice=document.querySelector('meta[name="prosolver-notice-version"]')?.content||'';
+  const enabled=/^https:\/\/[^/]+\.workers\.dev$/.test(api) && notice!=='2026-11-draft';
+  const q=new URLSearchParams(location.search);
+  const referralCode=/^[A-F0-9]{18}$/i.test(q.get('ref')||'')?q.get('ref').toUpperCase():'';
+  const form=$('waitlistForm'),error=$('error'),record=$('record'),output=$('recordStatus'),playback=$('playback');
+  if(!enabled){$('submit').disabled=true;$('submit').textContent='Registration opens soon';$('accessForm').querySelector('button').disabled=true;}
+  let recorder,stream,audioBlob,audioURL,timer,ticker,started,requestKey=crypto.randomUUID(),sending=false;
+  const fail=message=>{error.textContent=message;error.classList.remove('hidden');error.scrollIntoView({block:'nearest'});};
+  const clear=()=>{error.textContent='';error.classList.add('hidden');};
+  const stopStream=()=>{if(stream){stream.getTracks().forEach(track=>track.stop());stream=null;}clearTimeout(timer);clearInterval(ticker);};
+  const discard=()=>{audioBlob=null;if(audioURL)URL.revokeObjectURL(audioURL);audioURL=null;playback.removeAttribute('src');playback.classList.add('hidden');$('deleteRecording').classList.add('hidden');output.textContent='Up to 2 minutes';$('recordText').textContent='Record a voice note';};
+  $('deleteRecording').onclick=discard;
+  record.onclick=async()=>{
     clear();
-    if(recorder?.state==='recording'){stop();return;}
-    if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){fail('Voice notes are unsupported in this browser. Please type instead.');return;}
-    try {
+    if(recorder?.state==='recording'){recorder.stop();return;}
+    if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){fail('Voice recording is unavailable in this browser. Please type your problem.');return;}
+    discard();
+    try{
       stream=await navigator.mediaDevices.getUserMedia({audio:true});
-      const mime=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t));
-      recorder=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);
+      const mime=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(type=>MediaRecorder.isTypeSupported(type));
+      if(!mime){stopStream();fail('This browser cannot make a supported recording. Please type your problem.');return;}
+      recorder=new MediaRecorder(stream,{mimeType:mime});
       const chunks=[];
-      recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+      recorder.ondataavailable=event=>{if(event.data.size)chunks.push(event.data);};
       recorder.onstop=()=>{
-        const type=recorder.mimeType.split(';')[0];
-        audioBlob=new Blob(chunks,{type});
-        if(audioURL) URL.revokeObjectURL(audioURL);
-        audioURL=URL.createObjectURL(audioBlob);
-        playback.src=audioURL;playback.classList.remove('hidden');
-        button.classList.remove('active');$('recordText').textContent='Record again';
-        output.textContent=`Recording ready (${Math.round(audioBlob.size/1024)} KB)`;
-        if(audioBlob.size>5*1024*1024)fail('Recording exceeds 5 MB. Record a shorter note.');
-        resetMedia();
+        audioBlob=new Blob(chunks,{type:recorder.mimeType.split(';')[0]});
+        audioURL=URL.createObjectURL(audioBlob);playback.src=audioURL;playback.classList.remove('hidden');
+        $('deleteRecording').classList.remove('hidden');record.classList.remove('active');
+        $('recordText').textContent='Record again';
+        output.textContent='Recording ready ('+Math.round(audioBlob.size/1024)+' KB)';
+        if(audioBlob.size>5*1024*1024)fail('Recording exceeds 5 MiB. Please record a shorter note.');
+        stopStream();
       };
-      recorder.start();
-      button.classList.add('active');$('recordText').textContent='Stop recording'; output.textContent='Recording (maximum 2 minutes)';
-      stopTimer=setTimeout(stop,120000);
-    } catch {resetMedia();fail('Microphone permission unavailable. Type your problem instead.');}
-  });
-  form.addEventListener('submit',async event=>{
+      recorder.start(1000);started=Date.now();
+      record.classList.add('active');$('recordText').textContent='Stop recording';
+      ticker=setInterval(()=>{output.textContent='Recording '+Math.floor((Date.now()-started)/1000)+' / 120 seconds';},1000);
+      timer=setTimeout(()=>{if(recorder.state==='recording')recorder.stop();},120000);
+    }catch{stopStream();fail('Microphone permission was unavailable. Please type your problem.');}
+  };
+  form.onsubmit=event=>{
     event.preventDefault();clear();
+    if(sending)return;
+    if(!enabled)return fail('Registration is not open yet. Please check back later.');
     if(recorder?.state==='recording')return fail('Stop your recording before submitting.');
     if(!$('problem').value.trim()&&!audioBlob)return fail('Type or record a problem.');
-    if(!$('email').validity.valid)return fail('Enter a valid email.');
-    if(!$('consent').checked)return fail('Consent is required.');
-    if(audioBlob?.size>5*1024*1024)return fail('Recording exceeds 5 MB.');
-    if(!api||api.includes('REPLACE_'))return fail('Waitlist registration is not activated yet. Please check back soon.');
+    if(!$('email').validity.valid)return fail('Enter a valid email address.');
+    if(!/^\+[\d ()-]{7,32}$/.test($('phone').value.trim()))return fail('Enter an international phone number beginning with +.');
+    if(!$('consent').checked)return fail('Accept the privacy and contact notice.');
+    if(audioBlob?.size>5*1024*1024)return fail('Recording exceeds 5 MiB.');
     const data=new FormData();
-    for(const id of ['problem','daily','email','phone']) data.append(id,$(id).value.trim());
-    data.append('consent','yes');data.append('ref',referralCode);data.append('website','');
-    if(audioBlob)data.append('audio',audioBlob, 'hospital-voice-note.'+(audioBlob.type==='audio/mp4'?'mp4':'webm'));
-    const submit=$('submit');submit.disabled=true;submit.textContent='Submitting securely…';
-    try {
-      const response=await fetch(api+'/submit',{method:'POST',body:data,mode:'cors'});
-      const payload=await response.json();
-      if(!response.ok)throw Error(payload.error||'Unable to submit.');
-      $('entry').classList.add('hidden');$('success').classList.remove('hidden');
-      $('success').querySelector('h2').textContent='Please check your email';
-      $('success').querySelector('p').textContent='Open the verification link sent to your email. Your problem is pending verification. After verifying, your personal referral link will be shown.';
-      $('success').querySelector('.referral-box').classList.add('hidden');
-      $('share').classList.add('hidden');
-      $('success').querySelector('.footnote').textContent='Referral points are issued only when referred professionals submit and verify a qualifying request.';
-      $('captureCard').scrollIntoView({behavior:'smooth',block:'center'});
-    } catch(e){fail(e.message||'The submission could not be completed.');}
-    finally{submit.disabled=false;submit.textContent='Submit my problem & join waitlist →';}
-  });
-  if(q.get('verified')==='1' && /^[a-z0-9]{8,24}$/i.test(q.get('referral')||'')){
-    $('entry').classList.add('hidden');$('success').classList.remove('hidden');
-    $('success').querySelector('h2').textContent='Your email is verified';
-    $('success').querySelector('p').textContent='You are on the ProSolver Hospitals waitlist. Share your referral link. You earn 1 point when a new eligible colleague submits a problem and verifies their email.';
-    $('success').querySelector('.footnote').textContent='1 referral point can unlock 1 additional problem submission. Human resolution is not guaranteed and depends on availability.';
-    $('referral').value=location.origin+location.pathname+'?ref='+encodeURIComponent(q.get('referral'));
-    history.replaceState({},'',location.pathname);
-  }
-  $('copy').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('referral').value);$('copy').textContent='Copied';}catch{$('referral').select();$('copy').textContent='Select link';}});
-  $('share').addEventListener('click',async()=>{const url=$('referral').value;if(!url)return;try{if(navigator.share)await navigator.share({title:'ProSolver Hospitals',text:'Tell ProSolver about a hospital problem worth solving.',url});else await navigator.clipboard.writeText(url);}catch{}});
-  $('reset').addEventListener('click',()=>{location.href=location.pathname;});
-  window.addEventListener('pagehide',resetMedia);
+    for(const id of ['problem','daily','email','phone'])data.append(id,$(id).value.trim());
+    data.append('consent','yes');data.append('notice_version',notice);data.append('request_key',requestKey);
+    data.append('ref',referralCode);data.append('website','');
+    if(audioBlob)data.append('audio',audioBlob,'voice-note');
+    const xhr=new XMLHttpRequest();xhr.open('POST',api+'/submit');xhr.responseType='json';
+    sending=true;$('submit').disabled=true;$('submit').textContent='Submitting…';
+    xhr.upload.onprogress=e=>{if(e.lengthComputable)$('submit').textContent='Uploading '+Math.round(e.loaded/e.total*100)+'%…';};
+    xhr.onload=()=>{
+      const response=xhr.response||{};
+      if(xhr.status>=200&&xhr.status<300){requestKey=crypto.randomUUID();$('entry').classList.add('hidden');$('success').classList.remove('hidden');$('captureCard').scrollIntoView({behavior:'smooth',block:'center'});}
+      else fail(response.error||'Submission could not be completed. Please try later.');
+    };
+    xhr.onerror=()=>fail('Network error. Please try again.');
+    xhr.onloadend=()=>{sending=false;$('submit').disabled=false;$('submit').textContent='Submit my problem & join waitlist →';};
+    xhr.send(data);
+  };
+  $('accessForm').onsubmit=async event=>{
+    event.preventDefault();
+    const status=$('accessStatus');
+    if(!enabled){status.textContent='Registration is not open yet.';return;}
+    status.textContent='Sending…';
+    try{const data=new FormData();data.append('email',$('accessEmail').value.trim());const res=await fetch(api+'/access',{method:'POST',body:data});const body=await res.json();status.textContent=body.message||body.error||'Unable to send link.';}
+    catch{status.textContent='Unable to send link. Please try later.';}
+  };
+  $('reset').onclick=()=>{location.href=location.pathname;};
+  window.addEventListener('pagehide',stopStream);
 })();
